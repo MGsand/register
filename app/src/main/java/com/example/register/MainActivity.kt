@@ -1,3 +1,5 @@
+package com.example.register
+
 import android.os.Bundle
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
