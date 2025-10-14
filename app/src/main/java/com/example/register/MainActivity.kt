@@ -23,6 +23,7 @@ class MainActivity : AppCompatActivity() {
         tabLayout = findViewById(R.id.tabLayout)
 
         val adapter = ViewPagerAdapter(this)
+        adapter.addFragment(GameFragment(), "Игра")
         adapter.addFragment(RegistrationFragment(), "Регистрация")
         adapter.addFragment(RulesFragment(), "Правила")
         adapter.addFragment(AuthorsFragment(), "Авторы")
@@ -32,5 +33,9 @@ class MainActivity : AppCompatActivity() {
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
             tab.text = adapter.getPageTitle(position)
         }.attach()
+    }
+
+    fun switchToTab(tabIndex: Int) {
+        viewPager.currentItem = tabIndex
     }
 }
