@@ -1,11 +1,16 @@
 package com.example.register
 
+import android.content.Context
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import com.example.register.database.AppDatabase
+import com.example.register.database.User
+import kotlinx.coroutines.launch
 import java.util.*
 
 class RegistrationFragment : Fragment() {
@@ -19,16 +24,24 @@ class RegistrationFragment : Fragment() {
     private lateinit var zodiacSignImageView: ImageView
     private lateinit var registerButton: Button
     private lateinit var displayTextView: TextView
+
+    private lateinit var database: AppDatabase
     private var selectedDate: Calendar = Calendar.getInstance()
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View? {
-        // Заменяем setContentView на inflate
-        val view = inflater.inflate(R.layout.fragment_registration, container, false)
+        return inflater.inflate(R.layout.fragment_registration, container, false)
+    }
 
-        // Initialize views - теперь через view.findViewById
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        // Инициализация базы данных
+        database = AppDatabase.getInstance(requireContext())
+
+        // Initialize views
         fullNameEditText = view.findViewById(R.id.fullNameEditText)
         genderRadioGroup = view.findViewById(R.id.genderRadioGroup)
         courseSpinner = view.findViewById(R.id.courseSpinner)
@@ -70,12 +83,46 @@ class RegistrationFragment : Fragment() {
         difficultyValueTextView.text = "Value: ${difficultySeekBar.progress}"
 
         updateZodiacSign() // Initialize zodiac sign on startup
-
-        return view
     }
 
     private fun registerPlayer() {
-        val fullName = fullNameEditText.text.toString()
+        val fullName = fullNameEditText.text.toString().trim()
+
+        if (fullName.isEmpty()) {
+            Toast.makeText(requireContext(), "Введите имя", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        lifecycleScope.launch {
+            // Проверяем, существует ли пользователь с таким именем
+            val existingUser = database.userDao().getUserByName(fullName)
+
+            if (existingUser != null) {
+                // Пользователь уже существует - устанавливаем его как текущего
+                setCurrentUser(existingUser.id, existingUser.fullName)
+                activity?.runOnUiThread {
+                    displayRegistrationInfo(existingUser.fullName)
+                    Toast.makeText(requireContext(), "Добро пожаловать обратно, ${existingUser.fullName}!", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                // Создаем нового пользователя
+                val userId = database.userDao().insert(User(fullName = fullName))
+                setCurrentUser(userId, fullName)
+                activity?.runOnUiThread {
+                    displayRegistrationInfo(fullName)
+                    Toast.makeText(requireContext(), "Пользователь $fullName зарегистрирован!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun setCurrentUser(userId: Long, userName: String) {
+        val sharedPref = requireActivity().getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        sharedPref.edit().putLong("current_user_id", userId).apply()
+        sharedPref.edit().putString("current_user_name", userName).apply()
+    }
+
+    private fun displayRegistrationInfo(userName: String) {
         val genderId = genderRadioGroup.checkedRadioButtonId
         val gender = when (genderId) {
             R.id.maleRadioButton -> "Male"
@@ -86,15 +133,13 @@ class RegistrationFragment : Fragment() {
         val difficulty = difficultySeekBar.progress
         val zodiacSign = getZodiacSign(selectedDate.get(Calendar.MONTH), selectedDate.get(Calendar.DAY_OF_MONTH))
 
-        val playerData = PlayerData(fullName, gender, course, difficulty, selectedDate, zodiacSign)
-
         val displayText = """
-            Full Name: ${playerData.fullName}
-            Gender: ${playerData.gender}
-            Course: ${playerData.course}
-            Difficulty: ${playerData.difficulty}
-            Date of Birth: ${selectedDate.get(Calendar.DAY_OF_MONTH)}/${selectedDate.get(Calendar.MONTH) + 1}/${selectedDate.get(Calendar.YEAR)}
-            Zodiac Sign: ${playerData.zodiacSign}
+            Игрок: $userName
+            Пол: $gender
+            Курс: $course
+            Сложность: $difficulty
+            Знак зодиака: $zodiacSign
+            Готов к игре! 🎮
         """.trimIndent()
 
         displayTextView.text = displayText
@@ -142,13 +187,3 @@ class RegistrationFragment : Fragment() {
         }
     }
 }
-
-// Data class остается как есть
-data class PlayerData(
-    val fullName: String,
-    val gender: String,
-    val course: String,
-    val difficulty: Int,
-    val dob: Calendar,
-    val zodiacSign: String
-)

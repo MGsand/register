@@ -4,20 +4,34 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import com.example.register.database.AppDatabase
+import com.example.register.database.Score
+import com.example.register.database.User
+import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 import kotlin.random.Random
 
-class GameFragment : Fragment() {
+class GameFragment : Fragment(), SensorEventListener {
 
     private lateinit var gameContainer: ViewGroup
     private lateinit var scoreTextView: TextView
@@ -31,9 +45,10 @@ class GameFragment : Fragment() {
     private var timeLeft = 60
     private var gameActive = false
     private var currentBugs = mutableListOf<Bug>()
+    private var currentBonus: Bonus? = null
     private var gamePaused = false
 
-    private var gameSpeed = 1
+    private var gameSpeed = 5
     private var maxBugs = 10
     private var bonusInterval = 30
     private var roundDuration = 60
@@ -46,6 +61,18 @@ class GameFragment : Fragment() {
         R.drawable.bug4
     )
 
+    private lateinit var sensorManager: SensorManager
+    private lateinit var accelerometer: Sensor
+    private var isGravityActive = false
+    private var gravityStartTime = 0L
+    private val GRAVITY_DURATION = 10000L
+
+    private var mediaPlayer: MediaPlayer? = null
+    private lateinit var vibrator: Vibrator
+
+    private lateinit var database: AppDatabase
+    private var currentUserId: Long = 0
+    private var currentUserName = "Гость"
 
     private data class Bug(
         val imageView: ImageView,
@@ -55,6 +82,11 @@ class GameFragment : Fragment() {
         var targetY: Float,
         var speed: Float,
         var animator: ValueAnimator? = null
+    )
+
+    private data class Bonus(
+        val imageView: ImageView,
+        val type: String = "gravity"
     )
 
     override fun onCreateView(
@@ -73,6 +105,25 @@ class GameFragment : Fragment() {
         timerTextView = view.findViewById(R.id.timerTextView)
         menuButton = view.findViewById(R.id.menuButton)
 
+        database = AppDatabase.getInstance(requireContext())
+
+        sensorManager = requireContext().getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensorManager = requireContext().getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val sensors = sensorManager.getSensorList(Sensor.TYPE_ACCELEROMETER)
+        if (sensors.isNotEmpty()) {
+            accelerometer = sensors[0]
+        } else {
+            // Акселерометр не доступен
+            Toast.makeText(requireContext(), "Акселерометр не доступен на этом устройстве", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        // Исправленная инициализация вибрации
+        vibrator = requireContext().getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+
+        lifecycleScope.launch {
+            loadCurrentUser()
+        }
 
         gameContainer.setOnClickListener {
             if (gameActive && !gamePaused) {
@@ -80,11 +131,9 @@ class GameFragment : Fragment() {
             }
         }
 
-
         menuButton.setOnClickListener {
             showGameMenu()
         }
-
 
         gameContainer.post {
             loadGameSettings()
@@ -92,9 +141,222 @@ class GameFragment : Fragment() {
         }
     }
 
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (!isGravityActive || !gameActive || gamePaused) return
+
+        event?.let { sensorEvent ->
+            if (sensorEvent.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+                val x = sensorEvent.values[0]
+                val y = sensorEvent.values[1]
+
+                applyGravityToBugs(x, y)
+
+                if (System.currentTimeMillis() - gravityStartTime > GRAVITY_DURATION) {
+                    stopGravityEffect()
+                }
+            }
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    private fun applyGravityToBugs(x: Float, y: Float) {
+        currentBugs.forEach { bug ->
+            val gravityStrength = 8.0f
+            val newX = bug.imageView.x + x * gravityStrength
+            val newY = bug.imageView.y - y * gravityStrength
+
+            val boundedX = newX.coerceIn(0f, (gameContainer.width - bug.imageView.width).toFloat())
+            val boundedY = newY.coerceIn(0f, (gameContainer.height - bug.imageView.height).toFloat())
+
+            bug.imageView.x = boundedX
+            bug.imageView.y = boundedY
+            bug.currentX = boundedX
+            bug.currentY = boundedY
+        }
+    }
+
+    private fun startGravityEffect() {
+        if (isGravityActive) return
+
+        isGravityActive = true
+        gravityStartTime = System.currentTimeMillis()
+
+        sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+
+        playBugScream()
+
+        if (vibrator.hasVibrator()) {
+            // Исправленная версия вибрации
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                // Для API 26 и выше
+                val vibrationEffect = VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE)
+                vibrator.vibrate(vibrationEffect)
+            } else {
+                // Для старых версий
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(500)
+            }
+        }
+
+        showTemporaryMessage("Гравитация активирована! Наклоняйте телефон!")
+    }
+
+    private fun stopGravityEffect() {
+        if (!isGravityActive) return
+
+        isGravityActive = false
+        sensorManager.unregisterListener(this)
+
+        showTemporaryMessage("Гравитация деактивирована")
+    }
+
+    private fun playBugScream() {
+        try {
+            mediaPlayer = MediaPlayer.create(requireContext(), R.raw.bug_scream)
+            mediaPlayer?.start()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun startBonusSpawning() {
+        handler.post(object : Runnable {
+            override fun run() {
+                if (gameActive && !gamePaused && currentBonus == null) {
+                    spawnBonus()
+                    handler.postDelayed(this, 15000)
+                } else if (gameActive && !gamePaused) {
+                    handler.postDelayed(this, 5000)
+                }
+            }
+        })
+    }
+
+    private fun spawnBonus() {
+        val bonusSize = 80
+        val bonus = ImageView(requireContext())
+
+        val layoutParams = ViewGroup.LayoutParams(bonusSize, bonusSize)
+        bonus.layoutParams = layoutParams
+
+        bonus.setImageResource(R.drawable.ic_launcher_foreground)
+        bonus.scaleType = ImageView.ScaleType.FIT_CENTER
+
+        val x = Random.nextInt(gameContainer.width - bonusSize).toFloat()
+        val y = Random.nextInt(gameContainer.height - bonusSize).toFloat()
+
+        bonus.x = x
+        bonus.y = y
+
+        bonus.alpha = 0f
+        bonus.scaleX = 0f
+        bonus.scaleY = 0f
+
+        bonus.animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(1000)
+            .start()
+
+        val blinkAnimator = ObjectAnimator.ofFloat(bonus, "alpha", 1f, 0.3f, 1f)
+        blinkAnimator.duration = 1000
+        blinkAnimator.repeatCount = ObjectAnimator.INFINITE
+        blinkAnimator.start()
+
+        bonus.setOnClickListener {
+            collectBonus()
+        }
+
+        gameContainer.addView(bonus)
+        currentBonus = Bonus(bonus, "gravity")
+
+        handler.postDelayed({
+            if (currentBonus != null) {
+                removeBonus()
+            }
+        }, 10000)
+    }
+
+    private fun collectBonus() {
+        currentBonus?.let { bonus ->
+            val scaleX = ObjectAnimator.ofFloat(bonus.imageView, "scaleX", 1f, 2f, 0f)
+            val scaleY = ObjectAnimator.ofFloat(bonus.imageView, "scaleY", 1f, 2f, 0f)
+            val rotation = ObjectAnimator.ofFloat(bonus.imageView, "rotation", 0f, 360f)
+
+            scaleX.duration = 500
+            scaleY.duration = 500
+            rotation.duration = 500
+
+            scaleX.addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    gameContainer.removeView(bonus.imageView)
+                }
+            })
+
+            scaleX.start()
+            scaleY.start()
+            rotation.start()
+
+            startGravityEffect()
+
+            currentBonus = null
+
+            score += 50
+            updateUI()
+            showTemporaryMessage("+50 очков за бонус!")
+        }
+    }
+
+    private fun removeBonus() {
+        currentBonus?.let { bonus ->
+            bonus.imageView.animate()
+                .alpha(0f)
+                .scaleX(0f)
+                .scaleY(0f)
+                .setDuration(500)
+                .withEndAction {
+                    gameContainer.removeView(bonus.imageView)
+                }
+                .start()
+            currentBonus = null
+        }
+    }
+
+    private suspend fun loadCurrentUser() {
+        val sharedPref = requireActivity().getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        val userId = sharedPref.getLong("current_user_id", 0L)
+
+        if (userId > 0) {
+            val user = database.userDao().getUserById(userId)
+            if (user != null) {
+                currentUserId = user.id
+                currentUserName = user.fullName
+            } else {
+                createGuestUser()
+            }
+        } else {
+            createGuestUser()
+        }
+
+        activity?.runOnUiThread {
+            showTemporaryMessage("Добро пожаловать, $currentUserName!")
+        }
+    }
+
+    private suspend fun createGuestUser() {
+        currentUserId = database.userDao().insert(User(fullName = "Гость"))
+        currentUserName = "Гость"
+
+        val sharedPref = requireActivity().getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        sharedPref.edit().putLong("current_user_id", currentUserId).apply()
+        sharedPref.edit().putString("current_user_name", currentUserName).apply()
+    }
+
     private fun loadGameSettings() {
-        val sharedPref = requireActivity().getSharedPreferences("game_settings", android.content.Context.MODE_PRIVATE)
-        gameSpeed = sharedPref.getInt("game_speed", 1)
+        val sharedPref = requireActivity().getSharedPreferences("game_settings", Context.MODE_PRIVATE)
+        gameSpeed = sharedPref.getInt("game_speed", 5)
         maxBugs = sharedPref.getInt("max_cockroaches", 10)
         bonusInterval = sharedPref.getInt("bonus_interval", 30)
         roundDuration = sharedPref.getInt("round_duration", 60)
@@ -112,41 +374,44 @@ class GameFragment : Fragment() {
         updateUI()
         startTimer()
         startBugSpawning()
-
+        startBonusSpawning()
     }
 
     private fun pauseGame() {
         gamePaused = true
         currentBugs.forEach { it.animator?.pause() }
+        if (isGravityActive) {
+            sensorManager.unregisterListener(this)
+        }
         handler.removeCallbacksAndMessages(null)
     }
 
     private fun resumeGame() {
         gamePaused = false
         currentBugs.forEach { it.animator?.resume() }
+        if (isGravityActive) {
+            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+        }
         startTimer()
         startBugSpawning()
+        startBonusSpawning()
     }
 
     private fun handleMiss() {
         if (!gameActive || gamePaused) return
 
-        // Штраф за промах
         score -= 3
         bugsMissed++
-
 
         showMissEffect()
         updateUI()
 
-
-     //   if (bugsMissed % 5 == 0) {
-       //     showTemporaryMessage("Промах! -3 очка")
-      //  }
+        if (bugsMissed % 5 == 0) {
+            showTemporaryMessage("Промах! -3 очка")
+        }
     }
 
     private fun showMissEffect() {
-
         val missText = TextView(requireContext())
         missText.text = "-3"
         missText.setTextColor(0xFFFF4444.toInt())
@@ -155,7 +420,6 @@ class GameFragment : Fragment() {
         missText.y = gameContainer.height / 2f - 50f
 
         gameContainer.addView(missText)
-
 
         val fadeOut = ObjectAnimator.ofFloat(missText, "alpha", 1f, 0f)
         val moveUp = ObjectAnimator.ofFloat(missText, "translationY", 0f, -100f)
@@ -173,7 +437,30 @@ class GameFragment : Fragment() {
         moveUp.start()
     }
 
+    private fun showTemporaryMessage(message: String) {
+        val messageText = TextView(requireContext())
+        messageText.text = message
+        messageText.setTextColor(0xFFFFFFFF.toInt())
+        messageText.textSize = 18f
+        messageText.setBackgroundColor(0xAA000000.toInt())
+        messageText.setPadding(20, 10, 20, 10)
 
+        messageText.x = gameContainer.width / 2f - 150f
+        messageText.y = gameContainer.height / 4f
+
+        gameContainer.addView(messageText)
+
+        handler.postDelayed({
+            val fadeOut = ObjectAnimator.ofFloat(messageText, "alpha", 1f, 0f)
+            fadeOut.duration = 500
+            fadeOut.addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    gameContainer.removeView(messageText)
+                }
+            })
+            fadeOut.start()
+        }, 2000)
+    }
 
     private fun startTimer() {
         handler.post(object : Runnable {
@@ -181,6 +468,10 @@ class GameFragment : Fragment() {
                 if (gameActive && !gamePaused && timeLeft > 0) {
                     timeLeft--
                     updateUI()
+
+                    if (timeLeft == 10) {
+                        showTemporaryMessage("Осталось 10 секунд!")
+                    }
 
                     handler.postDelayed(this, 1000)
                 } else if (timeLeft <= 0) {
@@ -205,7 +496,7 @@ class GameFragment : Fragment() {
     }
 
     private fun spawnBug() {
-        val bugSize = Random.nextInt(100, 180)
+        val bugSize = Random.nextInt(120, 200)
         val bug = ImageView(requireContext())
 
         val layoutParams = ViewGroup.LayoutParams(bugSize, bugSize)
@@ -215,12 +506,10 @@ class GameFragment : Fragment() {
         bug.setImageResource(bugDrawable)
         bug.scaleType = ImageView.ScaleType.FIT_CENTER
 
-
         bug.isClickable = true
         bug.isFocusable = true
         val touchPadding = 15
         bug.setPadding(touchPadding, touchPadding, touchPadding, touchPadding)
-
 
         val startX = when (Random.nextInt(4)) {
             0 -> -bugSize.toFloat()
@@ -237,24 +526,19 @@ class GameFragment : Fragment() {
         bug.x = startX
         bug.y = startY
 
-        // Анимация появления
         bug.alpha = 0f
         bug.animate().alpha(1f).setDuration(500).start()
-
 
         val targetX = Random.nextInt(gameContainer.width - bugSize).toFloat()
         val targetY = Random.nextInt(gameContainer.height - bugSize).toFloat()
 
-
-        val baseSpeed = 0.3f
+        val baseSpeed = 0.25f
         val speedFromSettings = gameSpeed * 0.03f
         val randomVariation = Random.nextFloat() * 0.15f
-
         val speed = baseSpeed + speedFromSettings + randomVariation
 
         val bugData = Bug(bug, startX, startY, targetX, targetY, speed)
 
-        // Обработчик клика
         bug.setOnClickListener {
             if (!gamePaused) {
                 destroyBug(bugData, true)
@@ -266,7 +550,6 @@ class GameFragment : Fragment() {
 
         startBugMovement(bugData)
 
-        // Увеличиваем время жизни жука
         handler.postDelayed({
             if (currentBugs.contains(bugData)) {
                 destroyBug(bugData, false)
@@ -279,7 +562,6 @@ class GameFragment : Fragment() {
 
     private fun startBugMovement(bug: Bug) {
         val animator = ValueAnimator.ofFloat(0f, 1f)
-
 
         val baseDuration = 2500L
         val speedFactor = (1.0 / bug.speed.toDouble()).toFloat()
@@ -294,12 +576,10 @@ class GameFragment : Fragment() {
 
             val fraction = animation.animatedValue as Float
 
-
             val movementSmoothness = 0.04f
 
             bug.currentX = bug.imageView.x + (bug.targetX - bug.imageView.x) * movementSmoothness
             bug.currentY = bug.imageView.y + (bug.targetY - bug.imageView.y) * movementSmoothness
-
 
             bug.currentX = bug.currentX.coerceIn(0f, (gameContainer.width - bug.imageView.width).toFloat())
             bug.currentY = bug.currentY.coerceIn(0f, (gameContainer.height - bug.imageView.height).toFloat())
@@ -307,17 +587,14 @@ class GameFragment : Fragment() {
             bug.imageView.x = bug.currentX
             bug.imageView.y = bug.currentY
 
-
             val distanceToTarget = sqrt(
                 (bug.targetX - bug.currentX) * (bug.targetX - bug.currentX) +
                         (bug.targetY - bug.currentY) * (bug.targetY - bug.currentY)
             )
 
-
             if (distanceToTarget < 25 || fraction >= 0.99f) {
                 bug.targetX = Random.nextInt(gameContainer.width - bug.imageView.width).toFloat()
                 bug.targetY = Random.nextInt(gameContainer.height - bug.imageView.height).toFloat()
-
 
                 animator.setFloatValues(0f, 1f)
                 animator.start()
@@ -327,7 +604,6 @@ class GameFragment : Fragment() {
         animator.addListener(object : AnimatorListenerAdapter() {
             override fun onAnimationEnd(animation: Animator) {
                 if (gameActive && currentBugs.contains(bug) && !gamePaused) {
-
                     bug.targetX = Random.nextInt(gameContainer.width - bug.imageView.width).toFloat()
                     bug.targetY = Random.nextInt(gameContainer.height - bug.imageView.height).toFloat()
                     animator.setFloatValues(0f, 1f)
@@ -350,13 +626,11 @@ class GameFragment : Fragment() {
             score += 10
             bugsDestroyed++
 
-
-          //  if (bugsDestroyed % 5 == 0) {
-         //       score += 20
-         //       showTemporaryMessage("Комбо x5! +20 очков! 🎉")
-         //   }
+            if (bugsDestroyed % 5 == 0) {
+                score += 20
+                showTemporaryMessage("Комбо x5! +20 очков!")
+            }
         }
-
 
         val scaleX = ObjectAnimator.ofFloat(bug.imageView, "scaleX", 1f, 0f)
         val scaleY = ObjectAnimator.ofFloat(bug.imageView, "scaleY", 1f, 0f)
@@ -385,13 +659,45 @@ class GameFragment : Fragment() {
         timerTextView.text = "Время: ${timeLeft}с"
     }
 
+    private suspend fun saveGameResult() {
+        val accuracy = if (bugsDestroyed + bugsMissed > 0) {
+            (bugsDestroyed.toFloat() / (bugsDestroyed + bugsMissed) * 100)
+        } else {
+            0f
+        }
+
+        val difficulty = when (gameSpeed) {
+            in 1..3 -> "Легкий"
+            in 4..7 -> "Средний"
+            else -> "Сложный"
+        }
+
+        val score = Score(
+            userId = currentUserId,
+            score = this.score,
+            difficulty = difficulty,
+            bugsDestroyed = bugsDestroyed,
+            accuracy = accuracy
+        )
+
+        database.scoreDao().insert(score)
+    }
+
     private fun showGameMenu() {
         pauseGame()
 
-        val menuItems = arrayOf("️ Продолжить", " Начать заново", " Правила", " Авторы", " Настройки", " Выйти")
+        val menuItems = arrayOf(
+            "Продолжить",
+            "Начать заново",
+            "Сменить пользователя",
+            "Настройки",
+            "Авторы",
+            "Правила",
+            "Выйти"
+        )
 
         android.app.AlertDialog.Builder(requireContext())
-            .setTitle("🎮 Игровое меню")
+            .setTitle("Игровое меню")
             .setItems(menuItems) { dialog, which ->
                 when (which) {
                     0 -> {
@@ -404,17 +710,23 @@ class GameFragment : Fragment() {
                     }
                     2 -> {
                         dialog.dismiss()
-                        navigateToSettings()
+                        lifecycleScope.launch {
+                            showUserSelectionDialog()
+                        }
                     }
                     3 -> {
                         dialog.dismiss()
-                        navigateToAuthors()
+                        navigateToSettings()
                     }
                     4 -> {
                         dialog.dismiss()
-                        navigateToRules()
+                        navigateToAuthors()
                     }
                     5 -> {
+                        dialog.dismiss()
+                        navigateToRules()
+                    }
+                    6 -> {
                         dialog.dismiss()
                         exitGame()
                     }
@@ -426,22 +738,55 @@ class GameFragment : Fragment() {
             .show()
     }
 
+    private suspend fun showUserSelectionDialog() {
+        val users = database.userDao().getAllUsers()
+
+        if (users.isEmpty()) {
+            activity?.runOnUiThread {
+                Toast.makeText(requireContext(), "Сначала зарегистрируйтесь во вкладке 'Регистрация'", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+
+        val userNames = users.map { it.fullName }.toTypedArray()
+
+        activity?.runOnUiThread {
+            android.app.AlertDialog.Builder(requireContext())
+                .setTitle("Выберите пользователя")
+                .setItems(userNames) { dialog, which ->
+                    val selectedUser = users[which]
+                    currentUserId = selectedUser.id
+                    currentUserName = selectedUser.fullName
+
+                    val sharedPref = requireActivity().getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                    sharedPref.edit().putLong("current_user_id", selectedUser.id).apply()
+                    sharedPref.edit().putString("current_user_name", selectedUser.fullName).apply()
+
+                    showTemporaryMessage("Играем за: ${selectedUser.fullName}")
+                    dialog.dismiss()
+                }
+                .setNegativeButton("Отмена", null)
+                .show()
+        }
+    }
+
     private fun navigateToSettings() {
         val mainActivity = requireActivity() as MainActivity
-        mainActivity.switchToTab(2) // Настройки - 3я вкладка (индекс 2)
+        mainActivity.switchToTab(3)
     }
 
     private fun navigateToAuthors() {
         val mainActivity = requireActivity() as MainActivity
-        mainActivity.switchToTab(3) // Авторы - 4я вкладка (индекс 3)
+        mainActivity.switchToTab(4)
     }
 
     private fun navigateToRules() {
         val mainActivity = requireActivity() as MainActivity
-        mainActivity.switchToTab(4) // Правила - 5я вкладка (индекс 4)
+        mainActivity.switchToTab(5)
     }
 
     private fun restartGame() {
+        stopGravityEffect()
 
         gameActive = false
         gamePaused = false
@@ -450,14 +795,16 @@ class GameFragment : Fragment() {
             gameContainer.removeView(bug.imageView)
         }
         currentBugs.clear()
-        handler.removeCallbacksAndMessages(null)
 
+        removeBonus()
+
+        handler.removeCallbacksAndMessages(null)
 
         startGame()
     }
 
     private fun exitGame() {
-
+        stopGravityEffect()
         gameActive = false
         gamePaused = false
         currentBugs.forEach { bug ->
@@ -465,39 +812,36 @@ class GameFragment : Fragment() {
             gameContainer.removeView(bug.imageView)
         }
         currentBugs.clear()
+        removeBonus()
         handler.removeCallbacksAndMessages(null)
 
-
-        scoreTextView.text = "Игра завершена\nНажмите 🎮 для новой игры"
+        scoreTextView.text = "Игра завершена\nНажмите для новой игры"
     }
 
     private fun endGame() {
         gameActive = false
         gamePaused = false
 
-
         currentBugs.forEach { bug ->
             bug.animator?.cancel()
             gameContainer.removeView(bug.imageView)
         }
         currentBugs.clear()
 
+        lifecycleScope.launch {
+            saveGameResult()
 
-        val accuracy = if (bugsDestroyed + bugsMissed > 0) {
-            (bugsDestroyed.toFloat() / (bugsDestroyed + bugsMissed) * 100).toInt()
-        } else {
-            0
+            val accuracy = if (bugsDestroyed + bugsMissed > 0) {
+                (bugsDestroyed.toFloat() / (bugsDestroyed + bugsMissed) * 100).toInt()
+            } else {
+                0
+            }
+
+
+            activity?.runOnUiThread {
+                scoreTextView.text = "Игра окончена!\nФинальный счет: $score\nТочность: ${accuracy}%"
+            }
         }
-
-        val resultText = when {
-            score >= 200 -> "Отличный результат! "
-            score >= 100 -> "Хорошая игра! "
-            score >= 50 -> "Неплохо! "
-            score >= 0 -> "Можно лучше! "
-            else -> "Попробуйте еще раз! "
-        }
-
-        scoreTextView.text = "Игра окончена!\n$resultText\nФинальный счет: $score\nТочность: ${accuracy}%"
     }
 
     override fun onPause() {
@@ -505,6 +849,7 @@ class GameFragment : Fragment() {
         if (gameActive) {
             pauseGame()
         }
+        sensorManager.unregisterListener(this)
     }
 
     override fun onResume() {
@@ -517,6 +862,9 @@ class GameFragment : Fragment() {
     override fun onDestroy() {
         super.onDestroy()
         gameActive = false
+        stopGravityEffect()
+        sensorManager.unregisterListener(this)
+        mediaPlayer?.release()
         handler.removeCallbacksAndMessages(null)
         currentBugs.forEach { it.animator?.cancel() }
     }
