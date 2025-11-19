@@ -187,13 +187,11 @@ class GameFragment : Fragment(), SensorEventListener {
         playBugScream()
 
         if (vibrator.hasVibrator()) {
-            // Исправленная версия вибрации
+            
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                // Для API 26 и выше
                 val vibrationEffect = VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE)
                 vibrator.vibrate(vibrationEffect)
             } else {
-                // Для старых версий
                 @Suppress("DEPRECATION")
                 vibrator.vibrate(500)
             }
