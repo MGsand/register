@@ -463,6 +463,7 @@ class GameFragment : Fragment(), SensorEventListener {
         startTimer()
         startBugSpawning()
         startBonusSpawning()
+        startGoldBugSpawning()
     }
 
     private fun pauseGame() {
