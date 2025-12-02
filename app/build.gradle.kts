@@ -48,8 +48,8 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:4.10.0")
 
 
-    implementation("io.insert-koin:koin-android:3.4.0")
-    implementation("io.insert-koin:koin-androidx-viewmodel:3.4.0")
+    //implementation("io.insert-koin:koin-android:3.4.0")
+    //implementation("io.insert-koin:koin-androidx-viewmodel:3.4.0")
 
 
     implementation(libs.androidx.core.ktx)

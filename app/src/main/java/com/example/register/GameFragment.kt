@@ -141,7 +141,7 @@ class GameFragment : Fragment(), SensorEventListener {
 
         handler.postDelayed({
             if (currentGoldBug != null) {
-                removeGoldBug()
+                handleMiss()
             }
         }, 15000) // Исчезает через 15 секунд
     }
