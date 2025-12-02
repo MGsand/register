@@ -24,12 +24,15 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import com.example.register.data.GoldRepository
 import com.example.register.database.AppDatabase
 import com.example.register.database.Score
 import com.example.register.database.User
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 import kotlin.random.Random
+
+
 
 class GameFragment : Fragment(), SensorEventListener {
 
@@ -73,6 +76,93 @@ class GameFragment : Fragment(), SensorEventListener {
     private lateinit var database: AppDatabase
     private var currentUserId: Long = 0
     private var currentUserName = "Гость"
+
+    private var goldBugRate: Double = 4500.0
+    private var currentGoldBug: GoldBug? = null
+
+    private data class GoldBug(
+        val imageView: ImageView,
+        val value: Int
+    )
+
+    private fun startGoldBugSpawning() {
+        handler.post(object : Runnable {
+            override fun run() {
+                if (gameActive && !gamePaused && currentGoldBug == null) {
+                    spawnGoldBug()
+                    handler.postDelayed(this, 20000) // Каждые 20 секунд
+                } else if (gameActive && !gamePaused) {
+                    handler.postDelayed(this, 5000)
+                }
+            }
+        })
+    }
+
+    private suspend fun loadGoldRate() {
+        try {
+            val repository = GoldRepository()
+            goldBugRate = repository.getGoldRate()
+        } catch (e: Exception) {
+            goldBugRate = 4500.0 // Значение по умолчанию
+        }
+    }
+
+    private fun spawnGoldBug() {
+        val bugSize = Random.nextInt(150, 250)
+        val bug = ImageView(requireContext())
+
+        val layoutParams = ViewGroup.LayoutParams(bugSize, bugSize)
+        bug.layoutParams = layoutParams
+
+        bug.setImageResource(R.drawable.gold_bug) // Золотая картинка
+        bug.scaleType = ImageView.ScaleType.FIT_CENTER
+
+        val value = (goldBugRate / 100).toInt() // Очки пропорциональны курсу
+
+        val x = Random.nextInt(gameContainer.width - bugSize).toFloat()
+        val y = Random.nextInt(gameContainer.height - bugSize).toFloat()
+        bug.x = x
+        bug.y = y
+
+        // Золотое свечение
+        bug.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(1000).start()
+
+        val glowAnimator = ObjectAnimator.ofFloat(bug, "alpha", 1f, 0.7f, 1f)
+        glowAnimator.duration = 800
+        glowAnimator.repeatCount = ObjectAnimator.INFINITE
+        glowAnimator.start()
+
+        bug.setOnClickListener {
+            collectGoldBug(value)
+        }
+
+        gameContainer.addView(bug)
+        currentGoldBug = GoldBug(bug, value)
+
+        handler.postDelayed({
+            if (currentGoldBug != null) {
+                removeGoldBug()
+            }
+        }, 15000) // Исчезает через 15 секунд
+    }
+
+    private fun collectGoldBug(value: Int) {
+        currentGoldBug?.let { goldBug ->
+            score += value
+            updateUI()
+
+            showTemporaryMessage("+$value очков за золотого таракана!")
+
+            goldBug.imageView.animate()
+                .scaleX(2f).scaleY(2f).alpha(0f)
+                .setDuration(500)
+                .withEndAction {
+                    gameContainer.removeView(goldBug.imageView)
+                }.start()
+
+            currentGoldBug = null
+        }
+    }
 
     private data class Bug(
         val imageView: ImageView,

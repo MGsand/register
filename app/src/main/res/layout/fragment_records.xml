@@ -4,25 +4,24 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp"
     android:background="#000000"
     tools:context=".RecordsFragment">
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="🏆 Таблица рекордов"
+        android:text="Таблица рекордов"
         android:textSize="24sp"
         android:textStyle="bold"
         android:gravity="center"
-        android:layout_marginBottom="16dp"
+        android:layout_margin="16dp"
         android:textColor="#FFFFFF" />
 
     <TextView
         android:id="@+id/emptyTextView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Пока нет рекордов!\nСыграйте в игру чтобы установить первый рекорд! 🎯"
+        android:text="Пока нет рекордов\nСыграйте в игру чтобы установить первый рекорд"
         android:textSize="16sp"
         android:gravity="center"
         android:textColor="#CCCCCC"

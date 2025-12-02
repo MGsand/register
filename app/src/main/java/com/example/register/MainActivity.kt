@@ -25,6 +25,7 @@ class MainActivity : AppCompatActivity() {
         val adapter = ViewPagerAdapter(this)
         adapter.addFragment(GameFragment(), "Игра")
         adapter.addFragment(RegistrationFragment(), "Регистрация")
+        adapter.addFragment(RecordsFragment(), "Рекорды")
         adapter.addFragment(RulesFragment(), "Правила")
         adapter.addFragment(AuthorsFragment(), "Авторы")
         adapter.addFragment(SettingsFragment(), "Настройки")
